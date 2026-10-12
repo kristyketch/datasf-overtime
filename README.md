@@ -31,7 +31,7 @@ into `ANALYTICS` with `dbt build --target prod`.
 
 ## Scheduling
 
-`.github/workflows/daily_ingest.yml` runs every day at 14:00 UTC: it loads
+`.github/workflows/daily_pipeline.yml` runs every day at 14:00 UTC: it loads
 the data, then builds and tests the dbt models. If the load fails, dbt does
 not run, so the dashboard keeps the previous day's tables. It needs three
 repository secrets: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_LOADER_KEY` and
@@ -42,7 +42,7 @@ repository secrets: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_LOADER_KEY` and
 - **Full reload, not incremental.** The source replaces every row on each
   publish and has no stable row key, so there is nothing to merge on.
 - **Raw is stored as JSON.** A new or renamed source column cannot break the
-  load. 
+  load.
 - **A loaded batch is checked before it is kept.** The row count must match
   the source and both year types must be present. Otherwise the batch is
   rolled back and staging keeps reading the previous one.
@@ -71,13 +71,13 @@ else has any. The four thresholds sit together at the top of the model.
 
 I chose the ratio to salary because the source has no overtime-hours column.
 
-
 ### The department summary
 
 One row per department per fiscal year: headcount, regular pay, overtime,
 overtime per employee and overtime as a share of regular pay. The last is the
 fairest comparison between departments. `analysis/department_overtime_questions.sql`
-ranks departments both ways for the latest year.
+ranks departments both ways for the latest year, limited to departments
+with at least 50 employees.
 
 ## Assumptions and limitations
 
@@ -101,18 +101,24 @@ ranks departments both ways for the latest year.
 | One row per department per year | Catches a join that multiplies rows |
 | Department totals match the citywide total | Catches records dropped or counted twice |
 | Loader checks: row count and year types | Stops a broken load reaching staging |
-| `dbt source freshness` | Fails if no load has finished in 49 hours |
+| `dbt source freshness` | Fails if no load has finished in 49 hours (defined, not yet in the daily run) |
 
-What I would add next: tests that a flagged record really passes both halves
-of the rule, accepted values for `year_type`, a Snowflake alert for a load
-that never started, and unit tests for the loader.
+What I would add next:
+
+- Source freshness in the daily run
+- Not-null tests on job code, fiscal year, department code and pay fields
+- Accepted values and ranges: valid fiscal years, no unexpected negative pay
+- A test that values present in raw are not null after casting in staging
+- Every department code maps to a department name
+- Tests that each access role sees only its intended rows and fields
+- Monitoring of row counts, run time and warehouse usage after each run
 
 ## Files
 
 | File | What it does |
 |---|---|
 | `ingest/load_employee_compensation.py` | Downloads the source and loads it into Snowflake |
-| `.github/workflows/daily_ingest.yml` | Runs the pipeline every day: the loader, then `dbt build` into `ANALYTICS` |
+| `.github/workflows/daily_pipeline.yml` | Runs the pipeline every day: the loader, then `dbt build` into `ANALYTICS` |
 | `snowflake/setup.sql` | Creates the databases, tables, roles and service users |
 | `dbt/dbt_project.yml` | Which schema and materialization each folder of models gets |
 | `dbt/profiles.yml` | How dbt connects to Snowflake, for dev and prod |
@@ -125,30 +131,3 @@ that never started, and unit tests for the loader.
 | `dbt/tests/assert_department_totals_match_source.sql` | Department totals add up to the citywide total |
 | `analysis/department_overtime_questions.sql` | Answers which departments have the most overtime |
 | `requirements.txt`, `.env.example`, `.gitignore` | Python packages, settings, and what git ignores |
-
-## Setting up
-
-1. Run `snowflake/setup.sql` in a Snowflake worksheet. The last line prints
-   your account identifier.
-2. Make a key pair for each service user, and attach each public key with the
-   `alter user` lines at the end of `setup.sql`:
-   ```
-   openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out snowflake_key.p8 -nocrypt
-   openssl rsa -in snowflake_key.p8 -pubout
-   ```
-   Repeat with `snowflake_dbt_key.p8` for dbt. Paste the public key without
-   its BEGIN and END lines.
-3. Copy `.env.example` to `.env` and fill in your account.
-4. Install and load:
-   ```
-   python3 -m venv .venv && source .venv/bin/activate
-   pip install -r requirements.txt
-   python ingest/load_employee_compensation.py
-   ```
-5. Build and test:
-   ```
-   cd dbt
-   export SNOWFLAKE_ACCOUNT=<your account>
-   dbt deps
-   dbt build
-   ```
