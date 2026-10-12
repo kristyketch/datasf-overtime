@@ -26,15 +26,23 @@ department.
 | Intermediate | `ANALYTICS_DEV.INTERMEDIATE` | View |
 | Analytics | `ANALYTICS_DEV.ANALYTICS` | Tables |
 
-`ANALYTICS_DEV` is for development. `dbt build --target prod` builds the same
-models into `ANALYTICS`.
+`ANALYTICS_DEV` is for development. The daily run builds the same models
+into `ANALYTICS` with `dbt build --target prod`.
+
+## Scheduling
+
+`.github/workflows/daily_ingest.yml` runs every day at 14:00 UTC: it loads
+the data, then builds and tests the dbt models. If the load fails, dbt does
+not run, so the dashboard keeps the previous day's tables. It needs three
+repository secrets: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_LOADER_KEY` and
+`SNOWFLAKE_DBT_KEY` (the contents of the two key files).
 
 ## Main transformations
 
 - **Full reload, not incremental.** The source replaces every row on each
   publish and has no stable row key, so there is nothing to merge on.
 - **Raw is stored as JSON.** A new or renamed source column cannot break the
-  load. Typing happens once, in staging.
+  load. 
 - **A loaded batch is checked before it is kept.** The row count must match
   the source and both year types must be present. Otherwise the batch is
   rolled back and staging keeps reading the previous one.
@@ -62,9 +70,7 @@ decides, which catches one person with large overtime in a job where nobody
 else has any. The four thresholds sit together at the top of the model.
 
 I chose the ratio to salary because the source has no overtime-hours column.
-I tried the city's own overtime cap (25% of scheduled hours) first, but
-converting pay to hours depends on the pay rate, and an hours-based and a
-pay-based version disagreed.
+
 
 ### The department summary
 
@@ -106,7 +112,7 @@ that never started, and unit tests for the loader.
 | File | What it does |
 |---|---|
 | `ingest/load_employee_compensation.py` | Downloads the source and loads it into Snowflake |
-| `.github/workflows/daily_ingest.yml` | Runs the loader every day |
+| `.github/workflows/daily_ingest.yml` | Runs the pipeline every day: the loader, then `dbt build` into `ANALYTICS` |
 | `snowflake/setup.sql` | Creates the databases, tables, roles and service users |
 | `dbt/dbt_project.yml` | Which schema and materialization each folder of models gets |
 | `dbt/profiles.yml` | How dbt connects to Snowflake, for dev and prod |

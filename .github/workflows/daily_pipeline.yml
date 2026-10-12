@@ -1,7 +1,9 @@
-# Runs the loader every day. If it fails, GitHub marks the run as failed and
-# sends a notification.
+# Runs the whole pipeline every day: load the data, then build and test the
+# dbt models. Steps run in order, and if one fails the run stops there, so
+# the dashboard tables are never rebuilt from a failed load. GitHub marks a
+# failed run and sends a notification.
 
-name: Daily ingest
+name: Daily pipeline
 
 on:
   schedule:
@@ -9,9 +11,11 @@ on:
   workflow_dispatch:        # lets me run it by hand from the Actions tab
 
 jobs:
-  load:
+  pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -19,14 +23,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests python-dotenv snowflake-connector-python
+      - run: pip install -r requirements.txt
 
-      - name: Write the Snowflake key from a repository secret
-        run: printf '%s\n' "$KEY" > snowflake_key.p8
+      - name: Write the Snowflake keys from repository secrets
+        run: |
+          printf '%s\n' "$LOADER_KEY" > snowflake_key.p8
+          printf '%s\n' "$DBT_KEY" > snowflake_dbt_key.p8
         env:
-          KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          LOADER_KEY: ${{ secrets.SNOWFLAKE_LOADER_KEY }}
+          DBT_KEY: ${{ secrets.SNOWFLAKE_DBT_KEY }}
 
-      - name: Load
+      - name: Load the data
         run: python ingest/load_employee_compensation.py
-        env:
-          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+
+      - name: Build and test the dbt models
+        working-directory: dbt
+        run: |
+          dbt deps
+          dbt build --target prod
