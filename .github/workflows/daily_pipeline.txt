@@ -1,0 +1,43 @@
+# Runs the whole pipeline every day: load the data, then build and test the
+# dbt models. Steps run in order, and if one fails the run stops there, so
+# the dashboard tables are never rebuilt from a failed load. GitHub marks a
+# failed run and sends a notification.
+
+name: Daily pipeline
+
+on:
+  schedule:
+    - cron: "0 14 * * *"   # 14:00 UTC, early morning in San Francisco
+  workflow_dispatch:        # lets me run it by hand from the Actions tab
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Write the Snowflake keys from repository secrets
+        run: |
+          printf '%s\n' "$LOADER_KEY" > snowflake_key.p8
+          printf '%s\n' "$DBT_KEY" > snowflake_dbt_key.p8
+        env:
+          LOADER_KEY: ${{ secrets.SNOWFLAKE_LOADER_KEY }}
+          DBT_KEY: ${{ secrets.SNOWFLAKE_DBT_KEY }}
+
+      - name: Load the data
+        run: python ingest/load_employee_compensation.py
+
+      - name: Build and test the dbt models
+        working-directory: dbt
+        run: |
+          dbt deps
+          dbt build --target prod
